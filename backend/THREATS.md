@@ -42,7 +42,7 @@
    between persisting a document/grant change and appending its event may leave
    an unaudited change. MongoDB transactions plus an external append-only sink
    are required before claiming forensic-grade audit guarantees.
-3. **File storage is local filesystem storage.** All API instances must share
+3. **File storage location.** With `STORAGE_DRIVER=gridfs` file bytes sit in MongoDB, so anyone holding database credentials can read them directly (same as anyone with access to the storage disk in `disk` mode); there is no per-file encryption at rest beyond what Atlas provides. In `disk` mode: All API instances must share
    the same private durable volume. A missing/incorrect volume prevents
    downloads; do not expose this directory through a static web server.
    Production multi-region/object-storage use is not implemented.

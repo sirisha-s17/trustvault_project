@@ -136,21 +136,53 @@ should add transaction-backed mutation+audit writes and external anchoring.
 ## Deployment (single service)
 
 The backend serves the `frontend/` folder as static files, so one Node
-service hosts both the UI and the API on one HTTPS origin. Example for Render
-(Railway/Fly/a VM are equivalent):
+service hosts both the UI and the API on one HTTPS origin.
 
-1. Push the repository (both `backend/` and `frontend/`) to GitHub.
-2. MongoDB Atlas → Network Access → allow the host's outbound IPs (or
-   `0.0.0.0/0` for a demo) and create a database user.
-3. Render → New Web Service → the repo. Root directory `backend`, build
-   `npm ci`, start `npm start`, health check path `/api/health`.
-4. Add a persistent disk mounted at `/var/data` (uploaded files live there;
-   without a disk they vanish on every redeploy).
-5. Environment variables:
-   `NODE_ENV=production`, `MONGODB_URI=…`, `JWT_SECRET=<64 random chars>`,
-   `CLIENT_ORIGIN=https://<your-service>.onrender.com` (exact, no trailing slash),
-   `TRUST_PROXY=1`, `STORAGE_DIR=/var/data/private-storage`.
-6. After the first deploy, open the Render shell and run `npm run seed`.
+**Where files live.** `STORAGE_DRIVER=disk` (default) writes uploads to
+`STORAGE_DIR`. `STORAGE_DRIVER=gridfs` stores them inside MongoDB (GridFS
+bucket `documentFiles`). Use `gridfs` on hosts whose disk is wiped on restart,
+such as Render's free plan. Either way files are kept under random UUIDs and are
+only reachable through the authorised download routes.
+
+### Render (free plan)
+
+1. MongoDB Atlas → Network Access → allow `0.0.0.0/0` (Render's outbound IPs
+   are not fixed). Use a separate database name for production, e.g.
+   `…mongodb.net/trustvault-prod?retryWrites=true&w=majority`.
+2. Render → New → Web Service → this repository, branch `main`.
+   Root directory `backend`, build `npm ci`, start `npm start`,
+   instance type Free, health check path `/api/health`. No disk.
+3. Environment variables:
+
+   | Key | Value |
+   | --- | --- |
+   | `NODE_ENV` | `production` |
+   | `MONGODB_URI` | Atlas URI with the production database name |
+   | `JWT_SECRET` | 64+ random characters (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`) |
+   | `JWT_EXPIRES_IN` | `1h` |
+   | `CLIENT_ORIGIN` | `https://<service>.onrender.com` — exact, no trailing slash |
+   | `TRUST_PROXY` | `1` |
+   | `STORAGE_DRIVER` | `gridfs` |
+   | `MAX_UPLOAD_BYTES` | `26214400` |
+
+   Do not set `PORT`; Render provides it.
+4. Seed from your own machine (the free plan has no shell). Because files go to
+   MongoDB, this works remotely:
+
+   ```powershell
+   $env:MONGODB_URI = "<the same production URI>"
+   $env:STORAGE_DRIVER = "gridfs"
+   npm run seed
+   ```
+
+   Then clear those two variables (or close the terminal) so local runs keep
+   using your local settings.
+5. Open the URL, sign in with the demo accounts, and run *Verify audit chain*
+   as the admin.
+
+Free instances sleep after ~15 minutes idle; the first request afterwards takes
+up to a minute. On a paid plan you can instead keep `STORAGE_DRIVER=disk` with
+a persistent disk mounted at `/var/data` and `STORAGE_DIR=/var/data/private-storage`.
 
 The cookie is `Secure` in production, so the site must be served over HTTPS
 (Render does this automatically).

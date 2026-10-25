@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+private-storage/
+uploads/
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

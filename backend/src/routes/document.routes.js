@@ -1,6 +1,5 @@
 const crypto = require("crypto");
 const express = require("express");
-const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const mongoose = require("mongoose");
@@ -145,12 +144,8 @@ async function readValidatedFile(req, res, auditAction, documentId = null) {
 }
 
 async function streamStoredFile(req, res, next, file) {
-  const filePath = storage.getFilePath(file.storageKey);
-  const stat = await fs.promises.stat(filePath).catch((error) => {
-    if (error.code !== "ENOENT") throw error;
-    return null;
-  });
-  if (!stat) {
+  const stored = await storage.openFile(file.storageKey);
+  if (!stored) {
     await appendAudit({
       actorId: req.user._id,
       documentId: req.document._id,
@@ -166,18 +161,18 @@ async function streamStoredFile(req, res, next, file) {
     documentId: req.document._id,
     action: "download",
     outcome: "success",
-    details: { sizeBytes: stat.size, version: file.version, checksumSha256: file.checksumSha256 }
+    details: { sizeBytes: stored.sizeBytes, version: file.version, checksumSha256: file.checksumSha256 }
   });
   const fileName = downloadFileName(req.document.name, file.mimeType, file.isCurrent ? null : file.version);
   const encodedName = encodeURIComponent(fileName).replace(/['()]/g, escape);
   res.set({
     "Content-Type": file.mimeType,
-    "Content-Length": stat.size,
+    "Content-Length": stored.sizeBytes,
     "Content-Disposition": `attachment; filename*=UTF-8''${encodedName}`,
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "private, no-store"
   });
-  const stream = fs.createReadStream(filePath);
+  const stream = stored.createStream();
   stream.on("error", next);
   return stream.pipe(res);
 }

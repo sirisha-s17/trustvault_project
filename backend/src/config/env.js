@@ -25,8 +25,15 @@ if (!Number.isSafeInteger(trustProxy) || trustProxy < 0) {
   throw new Error("TRUST_PROXY must be a non-negative integer");
 }
 
+// "disk" (default) or "gridfs" (store files in MongoDB, for hosts without a persistent disk).
+const storageDriver = process.env.STORAGE_DRIVER || "disk";
+if (!["disk", "gridfs"].includes(storageDriver)) {
+  throw new Error("STORAGE_DRIVER must be disk or gridfs");
+}
+
 module.exports = {
   trustProxy,
+  storageDriver,
   port: Number(process.env.PORT || 3000),
   nodeEnv: process.env.NODE_ENV || "development",
   mongoUri: process.env.MONGODB_URI,

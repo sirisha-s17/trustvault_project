@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { detectFileType } = require("../src/services/storage.service");
+const { detectFileType, getFilePath } = require("../src/services/storage.service");
 
 test("file content signatures must match the extension allowlist", () => {
   assert.equal(detectFileType(Buffer.from("%PDF-1.7"), ".pdf"), "application/pdf");
@@ -10,4 +10,11 @@ test("file content signatures must match the extension allowlist", () => {
   assert.equal(detectFileType(Buffer.from([0xff, 0x00]), ".txt"), null);
   assert.equal(detectFileType(Buffer.from("Hello TrustVault", "utf8"), ".txt"), "text/plain");
   assert.equal(detectFileType(Buffer.from("anything"), ".exe"), null);
+});
+
+test("storage keys cannot escape the private storage directory", () => {
+  for (const key of ["../../etc/passwd", "..\secret", "a".repeat(36), "", null, "00000000-0000-4000-8000-000000000001/../x"]) {
+    assert.throws(() => getFilePath(key), /Invalid storage key/);
+  }
+  assert.doesNotThrow(() => getFilePath("00000000-0000-4000-8000-000000000001"));
 });

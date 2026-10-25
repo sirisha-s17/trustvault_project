@@ -1,9 +1,17 @@
 const crypto = require("crypto");
-const fs = require("fs/promises");
+const fs = require("fs");
 const path = require("path");
-const { storageDir } = require("../config/env");
+const mongoose = require("mongoose");
+const { storageDir, storageDriver } = require("../config/env");
+
+// Files are stored under a random UUID, never under a user-supplied name, in
+// one of two private places:
+//   disk   - a directory outside the web root (default; local development)
+//   gridfs - MongoDB GridFS, for hosts whose disk is wiped on restart (Render free)
+// Neither is reachable over HTTP except through the authorised download routes.
 
 const absoluteStorageDir = path.resolve(storageDir);
+const STORAGE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function detectFileType(buffer, extension) {
   const signatures = {
@@ -44,22 +52,16 @@ function detectFileType(buffer, extension) {
   return type && type.matches(buffer) ? type.mimeType : null;
 }
 
-async function ensureStorageDirectory() {
-  await fs.mkdir(absoluteStorageDir, { recursive: true, mode: 0o700 });
-}
-
-async function saveFile(buffer) {
-  await ensureStorageDirectory();
-  const storageKey = crypto.randomUUID();
-  const filePath = path.join(absoluteStorageDir, storageKey);
-  await fs.writeFile(filePath, buffer, { flag: "wx", mode: 0o600 });
-  return storageKey;
-}
-
-function getFilePath(storageKey) {
-  if (!/^[0-9a-f-]{36}$/i.test(storageKey)) {
+function assertStorageKey(storageKey) {
+  if (typeof storageKey !== "string" || !STORAGE_KEY_PATTERN.test(storageKey)) {
     throw new Error("Invalid storage key");
   }
+}
+
+/* ---------- disk ---------- */
+
+function getFilePath(storageKey) {
+  assertStorageKey(storageKey);
   const filePath = path.resolve(absoluteStorageDir, storageKey);
   if (path.dirname(filePath) !== absoluteStorageDir) {
     throw new Error("Invalid storage key");
@@ -67,8 +69,73 @@ function getFilePath(storageKey) {
   return filePath;
 }
 
-async function removeFile(storageKey) {
-  await fs.rm(getFilePath(storageKey), { force: true });
+const diskDriver = {
+  async save(storageKey, buffer) {
+    await fs.promises.mkdir(absoluteStorageDir, { recursive: true, mode: 0o700 });
+    await fs.promises.writeFile(getFilePath(storageKey), buffer, { flag: "wx", mode: 0o600 });
+  },
+  async open(storageKey) {
+    const filePath = getFilePath(storageKey);
+    const stat = await fs.promises.stat(filePath).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    return stat ? { sizeBytes: stat.size, createStream: () => fs.createReadStream(filePath) } : null;
+  },
+  async remove(storageKey) {
+    await fs.promises.rm(getFilePath(storageKey), { force: true });
+  }
+};
+
+/* ---------- gridfs ---------- */
+
+function bucket() {
+  if (!mongoose.connection.db) {
+    throw new Error("GridFS storage needs an open MongoDB connection");
+  }
+  return new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "documentFiles" });
 }
 
-module.exports = { detectFileType, saveFile, getFilePath, removeFile };
+const gridfsDriver = {
+  async save(storageKey, buffer) {
+    assertStorageKey(storageKey);
+    await new Promise((resolve, reject) => {
+      const upload = bucket().openUploadStream(storageKey);
+      upload.once("finish", resolve);
+      upload.once("error", reject);
+      upload.end(buffer);
+    });
+  },
+  async open(storageKey) {
+    assertStorageKey(storageKey);
+    const files = bucket();
+    const [file] = await files.find({ filename: storageKey }).limit(1).toArray();
+    return file ? { sizeBytes: file.length, createStream: () => files.openDownloadStream(file._id) } : null;
+  },
+  async remove(storageKey) {
+    assertStorageKey(storageKey);
+    const files = bucket();
+    for (const file of await files.find({ filename: storageKey }).toArray()) {
+      await files.delete(file._id);
+    }
+  }
+};
+
+const driver = storageDriver === "gridfs" ? gridfsDriver : diskDriver;
+
+async function saveFile(buffer) {
+  const storageKey = crypto.randomUUID();
+  await driver.save(storageKey, buffer);
+  return storageKey;
+}
+
+// Returns { sizeBytes, createStream } or null when the stored file is missing.
+function openFile(storageKey) {
+  return driver.open(storageKey);
+}
+
+function removeFile(storageKey) {
+  return driver.remove(storageKey);
+}
+
+module.exports = { detectFileType, saveFile, openFile, removeFile, getFilePath };
